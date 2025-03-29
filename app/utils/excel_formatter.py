@@ -1,5 +1,3 @@
-# app/utils/excel_formatter.py
-
 import pandas as pd
 
 

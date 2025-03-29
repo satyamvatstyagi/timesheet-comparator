@@ -1,87 +1,39 @@
 import pandas as pd
-from io import BytesIO
-from pathlib import Path
-import os
-from app.utils.excel_formatter import (
-    format_comparison_sheet,
-    format_summary_sheet,
-    write_summary_sheet,
-    format_chart_sheet
-)
-
-
-def get_latest_file(folder: str, pattern: str):
-    files = sorted(Path(folder).glob(pattern),
-                   key=os.path.getmtime, reverse=True)
-    return files[0] if files else None
+from app.utils.load_mapping_file import load_mapping_file
+from app.utils.load_sap_file import load_sap_file
+from app.utils.process_sap_data import process_sap_data
+from app.utils.load_wand_file import load_wand_file
+from app.utils.process_wand_data import process_wand_data
+from app.utils.excel_writer import write_report_to_excel
 
 
 async def process_timesheets(sap_file, wand_file, mapping_file):
-    # === Load files from report folder ===
+    # === Validate Inputs ===
+    sap_path = sap_file.file if sap_file else None
+    wand_path = wand_file.file if wand_file else None
+    mapping_path = mapping_file.file if mapping_file else None
 
-    # Check if files are not provided, then load the latest files from the report folder
-    sap_file_path = sap_file.file if sap_file else None
-    wand_file_path = wand_file.file if wand_file else None
-    mapping_file_path = mapping_file.file if mapping_file else None
+    if not (sap_path and wand_path and mapping_path):
+        raise ValueError("❌ All files (SAP, WAND, Mapping) must be provided.")
 
-    # if any of the files are None, raise an error
-    if sap_file_path is None or wand_file_path is None or mapping_file_path is None:
+    # === Load Files ===
+    mapping_df, email_col = load_mapping_file(mapping_path)
+    if mapping_df.empty or not email_col:
         raise ValueError(
-            "All files must be provided or found in the report folder")
+            "❌ Failed to load mapping file or detect email column.")
 
-    # === Load mapping file ===
-    mapping_df = pd.read_csv(mapping_file_path)
-    mapping_df.columns = mapping_df.columns.str.strip()
-    email_col = next(
-        (col for col in mapping_df.columns if 'email' in col.lower()), None)
-    if email_col is None:
-        raise ValueError("'email' column not found in mapping.csv")
+    sap_raw_data, dates = load_sap_file(sap_path)
+    if sap_raw_data.empty:
+        raise ValueError("❌ Failed to load SAP file.")
+    sap_grouped, sap_long = process_sap_data(
+        sap_raw_data, dates, mapping_df, email_col)
 
-    # === Load SAP ===
-    sap_raw = pd.read_excel(sap_file_path, header=None, skiprows=19)
-    date_row = sap_raw.iloc[0, 6:].tolist()
-    dates = pd.to_datetime(date_row, errors='coerce')
-    sap_data = sap_raw.iloc[2:].reset_index(drop=True)
+    wand_df = load_wand_file(wand_path)
+    if wand_df.empty:
+        raise ValueError("❌ Failed to load WAND file.")
+    wand_grouped = process_wand_data(wand_df, mapping_df)
 
-    emails = sap_data.iloc[:, 4]
-    full_names = sap_data.iloc[:, 3]
-    hours_data = sap_data.iloc[:, 6:].applymap(
-        lambda x: float(str(x).replace(" H", "").strip()
-                        ) if pd.notnull(x) else 0
-    )
-
-    sap_long = pd.melt(hours_data.reset_index(drop=True),
-                       var_name="DayIndex", value_name="Hours")
-    sap_long['Email'] = emails.repeat(
-        hours_data.shape[1]).reset_index(drop=True)
-    sap_long['Full Name'] = full_names.repeat(
-        hours_data.shape[1]).reset_index(drop=True)
-    sap_long['Date'] = list(dates) * len(sap_data)
-    sap_long = sap_long[['Email', 'Full Name', 'Date', 'Hours']].dropna(subset=[
-                                                                        'Date', 'Hours'])
-
-    sap_grouped = sap_long.groupby(['Email', 'Full Name', 'Date']).agg({
-        'Hours': 'sum'}).reset_index()
-    sap_grouped = sap_grouped.merge(
-        mapping_df, left_on='Email', right_on=email_col, how='left')
-    sap_grouped.rename(columns={email_col: 'emailAddress'}, inplace=True)
-    sap_grouped.drop(columns=['Email'], inplace=True)
-
-    # === Load WAND ===
-    wand_df = pd.read_excel(wand_file_path, engine='xlrd')
-    wand_long = pd.melt(
-        wand_df, id_vars=['Name'], var_name='Date', value_name='Hours')
-    wand_long['Date'] = pd.to_datetime(wand_long['Date'], errors='coerce')
-    wand_long['Hours'] = pd.to_numeric(wand_long['Hours'], errors='coerce')
-    wand_long = wand_long.dropna(subset=['Date', 'Hours'])
-
-    wand_long = wand_long[wand_long['Name'].isin(mapping_df['proWandName'])]
-    wand_long = wand_long.merge(
-        mapping_df, left_on='Name', right_on='proWandName', how='left')
-
-    wand_grouped = wand_long.groupby(['emailAddress', 'Date', 'projectName']).agg({
-        'Hours': 'sum'}).reset_index()
-
+    # === Merge Process ===
     sap_grouped['Date'] = pd.to_datetime(sap_grouped['Date'])
     wand_grouped['Date'] = pd.to_datetime(wand_grouped['Date'])
 
@@ -98,22 +50,13 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
     merged['Delta'] = merged['Hours_sap'] - merged['Hours_wand']
     merged.rename(columns={'emailAddress': 'Email'}, inplace=True)
 
-    desired_order = ['Date', 'Email', 'Full Name', 'proWandName',
-                     'projectName', 'Hours_sap', 'Hours_wand', 'Delta']
+    # === Reorder Columns ===
+    desired_order = [
+        'Date', 'Email', 'Full Name', 'proWandName',
+        'projectName', 'Hours_sap', 'Hours_wand', 'Delta'
+    ]
     merged = merged[desired_order]
 
-    # === Write to Excel ===
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter', datetime_format='dd-mmm-yyyy') as writer:
-        merged.to_excel(writer, index=False, sheet_name='Comparison Report')
-        worksheet = writer.sheets['Comparison Report']
-        format_comparison_sheet(writer.book, worksheet, merged)
-
-        summary_df = write_summary_sheet(writer, merged, mapping_df, email_col)
-        summary_ws = writer.sheets['Summary']
-        format_summary_sheet(writer.book, summary_ws, summary_df)
-
-        format_chart_sheet(writer.book, writer.sheets, summary_df)
-
-    output.seek(0)
+    # === Final Excel Report Generation ===
+    output = write_report_to_excel(merged, mapping_df, email_col)
     return output
