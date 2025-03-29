@@ -3,7 +3,8 @@ from io import BytesIO
 from app.utils.excel_formatter import (
     format_comparison_sheet,
     format_summary_sheet,
-    write_summary_sheet
+    write_summary_sheet,
+    format_chart_sheet
 )
 
 
@@ -89,9 +90,13 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
         worksheet = writer.sheets['Comparison Report']
         format_comparison_sheet(writer.book, worksheet, merged)
 
+        # Add summary sheet
         summary_df = write_summary_sheet(writer, merged, mapping_df, email_col)
         summary_ws = writer.sheets['Summary']
         format_summary_sheet(writer.book, summary_ws, summary_df)
+
+        # Add charts
+        format_chart_sheet(writer.book, writer.sheets, summary_df)
 
     output.seek(0)
     return output

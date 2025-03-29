@@ -89,3 +89,49 @@ def format_summary_sheet(workbook, worksheet, summary_df):
 
     for col_num, value in enumerate(summary_df.columns):
         worksheet.write(0, col_num, value, header_format)
+
+
+def format_chart_sheet(workbook, sheets, summary_df):
+    worksheet = workbook.add_worksheet('Charts')
+
+    # Add chart 1: Bar chart of SAP vs WAND hours
+    bar_chart = workbook.add_chart({'type': 'column'})
+
+    row_count = len(summary_df)
+
+    bar_chart.add_series({
+        'name': 'SAP Hours',
+        'categories': ['Summary', 1, 0, row_count, 0],  # Email column
+        'values':     ['Summary', 1, 4, row_count, 4],  # Total SAP Hours
+        'fill':       {'color': '#5B9BD5'},
+    })
+    bar_chart.add_series({
+        'name': 'WAND Hours',
+        'categories': ['Summary', 1, 0, row_count, 0],
+        'values':     ['Summary', 1, 5, row_count, 5],  # Total WAND Hours
+        'fill':       {'color': '#ED7D31'},
+    })
+
+    bar_chart.set_title({'name': 'SAP vs WAND Hours'})
+    bar_chart.set_x_axis({'name': 'Email'})
+    bar_chart.set_y_axis({'name': 'Hours'})
+    bar_chart.set_style(11)
+
+    worksheet.insert_chart('B2', bar_chart, {'x_scale': 1.5, 'y_scale': 1.5})
+
+    # Add chart 2: Line chart of Hour Difference
+    line_chart = workbook.add_chart({'type': 'line'})
+
+    line_chart.add_series({
+        'name': 'Hour Difference',
+        'categories': ['Summary', 1, 0, row_count, 0],  # Email column
+        'values':     ['Summary', 1, 6, row_count, 6],  # Hour Difference
+        'line':       {'color': 'red'},
+    })
+
+    line_chart.set_title({'name': 'Hour Difference Per Employee'})
+    line_chart.set_x_axis({'name': 'Email'})
+    line_chart.set_y_axis({'name': 'Difference'})
+    line_chart.set_style(10)
+
+    worksheet.insert_chart('B20', line_chart, {'x_scale': 1.5, 'y_scale': 1.5})
