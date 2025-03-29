@@ -1,4 +1,5 @@
 import pandas as pd
+import math
 
 
 def format_comparison_sheet(workbook, worksheet, merged_df):
@@ -25,12 +26,19 @@ def format_comparison_sheet(workbook, worksheet, merged_df):
     for row_num in range(1, len(merged_df) + 1):
         for col_num, col_name in enumerate(merged_df.columns):
             value = merged_df.iloc[row_num - 1, col_num]
+
+            # === Safely handle NaN and inf ===
+            if pd.isna(value) or (isinstance(value, (float, int)) and math.isinf(value)):
+                value = None  # or 'N/A' if you prefer
+
+            # === Choose format ===
             if col_name == 'Date':
                 fmt = date_format
             elif col_name.startswith('Hours') or col_name == 'Delta':
-                fmt = highlight_format if col_name == 'Delta' and value != 0 else number_format
+                fmt = highlight_format if col_name == 'Delta' and value not in [0, None] else number_format
             else:
                 fmt = text_format
+
             worksheet.write(row_num, col_num, value, fmt)
 
 
