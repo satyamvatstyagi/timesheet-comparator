@@ -51,6 +51,8 @@ async def compare_timesheets(
         {'Hours': 'sum'}).reset_index()
     sap_grouped = sap_grouped.merge(
         mapping_df, left_on='Email', right_on='emailAddress', how='left')
+    # Drop original SAP 'Email' to prevent duplicate
+    sap_grouped.drop(columns=['Email'], inplace=True)
 
     # === Load WAND ===
     wand_df = pd.read_excel(wand_file.file, engine='xlrd')
