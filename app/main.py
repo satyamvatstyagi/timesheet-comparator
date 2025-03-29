@@ -103,10 +103,49 @@ async def compare_timesheets(
                      'projectName', 'Hours_sap', 'Hours_wand', 'Delta']
     merged = merged[desired_order]
 
-    # === Export
+    # === Save to Excel with formatting ===
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         merged.to_excel(writer, index=False, sheet_name='Comparison Report')
+
+        workbook = writer.book
+        worksheet = writer.sheets['Comparison Report']
+
+        # === Format styles ===
+        header_format = workbook.add_format({
+            'bold': True, 'text_wrap': True, 'valign': 'center',
+            'fg_color': '#DDEBF7', 'border': 1
+        })
+        number_format = workbook.add_format(
+            {'num_format': '0.00', 'border': 1})
+        text_format = workbook.add_format({'border': 1})
+        highlight_format = workbook.add_format({
+            'bg_color': '#FFD6D6', 'border': 1
+        })
+
+        # Set column widths
+        worksheet.set_column('A:A', 12)   # Date
+        worksheet.set_column('B:B', 30)   # Email
+        worksheet.set_column('C:C', 25)   # Full Name
+        worksheet.set_column('D:D', 20)   # proWandName
+        worksheet.set_column('E:G', 12)   # Hours & Delta
+
+        # Apply header formatting
+        for col_num, value in enumerate(merged.columns):
+            worksheet.write(0, col_num, value, header_format)
+
+        # Apply data formatting
+        for row_num in range(1, len(merged) + 1):
+            for col_num, col_name in enumerate(merged.columns):
+                value = merged.iloc[row_num - 1, col_num]
+                fmt = number_format if col_name.startswith(
+                    'Hours') or col_name == 'Delta' else text_format
+
+                # Highlight if delta ≠ 0
+                if col_name == 'Delta' and value != 0:
+                    fmt = highlight_format
+
+                worksheet.write(row_num, col_num, value, fmt)
 
     output.seek(0)
     return StreamingResponse(
