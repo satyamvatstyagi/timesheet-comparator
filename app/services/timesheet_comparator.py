@@ -1,5 +1,7 @@
 import pandas as pd
 from io import BytesIO
+from pathlib import Path
+import os
 from app.utils.excel_formatter import (
     format_comparison_sheet,
     format_summary_sheet,
@@ -8,9 +10,27 @@ from app.utils.excel_formatter import (
 )
 
 
+def get_latest_file(folder: str, pattern: str):
+    files = sorted(Path(folder).glob(pattern),
+                   key=os.path.getmtime, reverse=True)
+    return files[0] if files else None
+
+
 async def process_timesheets(sap_file, wand_file, mapping_file):
+    # === Load files from report folder ===
+
+    # Check if files are not provided, then load the latest files from the report folder
+    sap_file_path = sap_file.file if sap_file else None
+    wand_file_path = wand_file.file if wand_file else None
+    mapping_file_path = mapping_file.file if mapping_file else None
+
+    # if any of the files are None, raise an error
+    if sap_file_path is None or wand_file_path is None or mapping_file_path is None:
+        raise ValueError(
+            "All files must be provided or found in the report folder")
+
     # === Load mapping file ===
-    mapping_df = pd.read_csv(mapping_file.file)
+    mapping_df = pd.read_csv(mapping_file_path)
     mapping_df.columns = mapping_df.columns.str.strip()
     email_col = next(
         (col for col in mapping_df.columns if 'email' in col.lower()), None)
@@ -18,7 +38,7 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
         raise ValueError("'email' column not found in mapping.csv")
 
     # === Load SAP ===
-    sap_raw = pd.read_excel(sap_file.file, header=None, skiprows=19)
+    sap_raw = pd.read_excel(sap_file_path, header=None, skiprows=19)
     date_row = sap_raw.iloc[0, 6:].tolist()
     dates = pd.to_datetime(date_row, errors='coerce')
     sap_data = sap_raw.iloc[2:].reset_index(drop=True)
@@ -48,7 +68,7 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
     sap_grouped.drop(columns=['Email'], inplace=True)
 
     # === Load WAND ===
-    wand_df = pd.read_excel(wand_file.file, engine='xlrd')
+    wand_df = pd.read_excel(wand_file_path, engine='xlrd')
     wand_long = pd.melt(
         wand_df, id_vars=['Name'], var_name='Date', value_name='Hours')
     wand_long['Date'] = pd.to_datetime(wand_long['Date'], errors='coerce')
@@ -60,8 +80,7 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
         mapping_df, left_on='Name', right_on='proWandName', how='left')
 
     wand_grouped = wand_long.groupby(['emailAddress', 'Date', 'projectName']).agg({
-        'Hours': 'sum'
-    }).reset_index()
+        'Hours': 'sum'}).reset_index()
 
     sap_grouped['Date'] = pd.to_datetime(sap_grouped['Date'])
     wand_grouped['Date'] = pd.to_datetime(wand_grouped['Date'])
@@ -90,12 +109,10 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
         worksheet = writer.sheets['Comparison Report']
         format_comparison_sheet(writer.book, worksheet, merged)
 
-        # Add summary sheet
         summary_df = write_summary_sheet(writer, merged, mapping_df, email_col)
         summary_ws = writer.sheets['Summary']
         format_summary_sheet(writer.book, summary_ws, summary_df)
 
-        # Add charts
         format_chart_sheet(writer.book, writer.sheets, summary_df)
 
     output.seek(0)

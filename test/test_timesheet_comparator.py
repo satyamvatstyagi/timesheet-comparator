@@ -12,6 +12,7 @@ def test_compare_timesheets():
     response = requests.post(url, files=files)
 
     assert response.status_code == 200
-    with open("comparison_report_test.xlsx", "wb") as f:
+    report_path = os.path.join("reports", "comparison_report.xlsx")
+    with open(report_path, "wb") as f:
         f.write(response.content)
     assert os.path.exists("comparison_report_test.xlsx")
