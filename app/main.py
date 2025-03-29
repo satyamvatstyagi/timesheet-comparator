@@ -70,7 +70,7 @@ async def compare_timesheets(
         value_name='Hours'
     )
     wand_long['Date'] = pd.to_datetime(
-        wand_long['Date'], errors='coerce').dt.date
+        wand_long['Date'], errors='coerce')
     wand_long['Hours'] = pd.to_numeric(wand_long['Hours'], errors='coerce')
     wand_long = wand_long.dropna(subset=['Date', 'Hours'])
 
@@ -83,6 +83,11 @@ async def compare_timesheets(
         'Hours': 'sum'}).reset_index()
 
     # === Merge SAP and WAND
+
+    # Force 'Date' column in both dataframes to be datetime64[ns]
+    sap_grouped['Date'] = pd.to_datetime(sap_grouped['Date'])
+    wand_grouped['Date'] = pd.to_datetime(wand_grouped['Date'])
+
     merged = pd.merge(
         sap_grouped,
         wand_grouped,
@@ -122,6 +127,8 @@ async def compare_timesheets(
         highlight_format = workbook.add_format({
             'bg_color': '#FFD6D6', 'border': 1
         })
+        date_format = workbook.add_format(
+            {'num_format': 'dd-mmm-yyyy', 'border': 1})
 
         # Set column widths
         worksheet.set_column('A:A', 12)   # Date
@@ -138,6 +145,13 @@ async def compare_timesheets(
         for row_num in range(1, len(merged) + 1):
             for col_num, col_name in enumerate(merged.columns):
                 value = merged.iloc[row_num - 1, col_num]
+                # Choose format
+                if col_name == 'Date':
+                    fmt = date_format
+                elif col_name.startswith('Hours') or col_name == 'Delta':
+                    fmt = number_format
+                else:
+                    fmt = text_format
                 fmt = number_format if col_name.startswith(
                     'Hours') or col_name == 'Delta' else text_format
 
@@ -146,6 +160,62 @@ async def compare_timesheets(
                     fmt = highlight_format
 
                 worksheet.write(row_num, col_num, value, fmt)
+
+        # === Sheet 2: Consolidated Summary ===
+        sap_summary = sap_long.groupby(['Email', 'Full Name', 'Date'])[
+            'Hours'].sum().reset_index()
+        wand_summary = wand_long.groupby(['emailAddress', 'Date'])[
+            'Hours'].sum().reset_index()
+
+        all_emails = set(sap_summary['Email']).union(
+            set(wand_summary['emailAddress']))
+        summary_data = []
+
+        for email in all_emails:
+            sap_dates = set(sap_summary[sap_summary['Email'] == email]['Date'])
+            wand_dates = set(
+                wand_summary[wand_summary['emailAddress'] == email]['Date'])
+
+            extra_sap = sorted([d.strftime("%d")
+                               for d in (sap_dates - wand_dates)])
+            extra_wand = sorted([d.strftime("%d")
+                                for d in (wand_dates - sap_dates)])
+
+            sap_total = sap_summary[sap_summary['Email']
+                                    == email]['Hours'].sum()
+            wand_total = wand_summary[wand_summary['emailAddress'] == email]['Hours'].sum(
+            )
+
+            name = sap_summary[sap_summary['Email'] ==
+                               email]['Full Name'].iloc[0] if email in sap_summary['Email'].values else ""
+            team = mapping_df[mapping_df[email_col] ==
+                              email]['projectName'].iloc[0] if email in mapping_df[email_col].values else "N/A"
+
+            summary_data.append({
+                "Email": email,
+                "Full Name": name,
+                "Days Only in SAP": extra_sap,
+                "Days Only in WAND": extra_wand,
+                "Total SAP Hours": round(sap_total, 2),
+                "Total WAND Hours": round(wand_total, 2),
+                "Hour Difference": round(sap_total - wand_total, 2),
+                "Team": team
+            })
+
+        summary_df = pd.DataFrame(summary_data)
+        summary_df.to_excel(writer, index=False, sheet_name='Summary')
+
+        # === Optional: Format the Summary sheet ===
+        summary_ws = writer.sheets['Summary']
+        summary_ws.set_column('A:A', 30)  # Email
+        summary_ws.set_column('B:B', 25)  # Full Name
+        summary_ws.set_column('C:D', 30)  # Extra Days
+        summary_ws.set_column('E:G', 18)  # Totals & Diff
+        summary_ws.set_column('H:H', 15)  # Team
+
+        # Header format for summary
+        for col_num, value in enumerate(summary_df.columns):
+            summary_ws.write(0, col_num, value, header_format)
 
     output.seek(0)
     return StreamingResponse(
