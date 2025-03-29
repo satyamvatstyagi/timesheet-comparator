@@ -2,7 +2,6 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import StreamingResponse
 import pandas as pd
 from io import BytesIO
-import re
 
 app = FastAPI()
 
@@ -17,27 +16,25 @@ async def compare_timesheets(
     mapping_df = pd.read_csv(mapping_file.file)
     print("✅ Mapping loaded")
 
-    # === Load SAP sheet ===
+    # === Load SAP ===
     sap_raw = pd.read_excel(sap_file.file, header=None, skiprows=19)
 
-    # Extract dates from row 0 (index 19 originally), columns 6 onwards
+    # Extract dates from row 0 (index 19), starting from col 6
     date_row = sap_raw.iloc[0, 6:].tolist()
     dates = pd.to_datetime(date_row, errors='coerce').date
 
-    # Extract actual data from row 2 onward (index=21)
+    # Extract time entries from row 2 onward (index 21)
     sap_data = sap_raw.iloc[2:].reset_index(drop=True)
 
-    # Extract email column (index 4)
+    # Extract emails from column 4
     emails = sap_data.iloc[:, 4]
 
-    # Get hours from columns 6 onwards
+    # Extract hours from column 6+
     hours_data = sap_data.iloc[:, 6:]
-
-    # Clean '8.00 H' → 8.0
     hours_data = hours_data.applymap(lambda x: float(
         str(x).replace(" H", "").strip()) if pd.notnull(x) else 0)
 
-    # Repeat emails to match melt output
+    # Melt SAP into long format
     sap_long = pd.melt(
         hours_data.reset_index(drop=True),
         var_name="DayIndex",
@@ -46,11 +43,16 @@ async def compare_timesheets(
     sap_long['Email'] = emails.repeat(
         hours_data.shape[1]).reset_index(drop=True)
     sap_long['Date'] = list(dates) * len(sap_data)
+    sap_long = sap_long[['Email', 'Date', 'Hours']].dropna(
+        subset=['Date', 'Hours'])
 
-    sap_long = sap_long[['Email', 'Date', 'Hours']]
-    sap_long = sap_long.dropna(subset=['Date', 'Hours'])
+    # Group SAP and enrich with mapping
+    sap_grouped = sap_long.groupby(['Email', 'Date']).agg(
+        {'Hours': 'sum'}).reset_index()
+    sap_grouped = sap_grouped.merge(
+        mapping_df, left_on='Email', right_on='emailAddress', how='left')
 
-    # === Load WAND timesheet ===
+    # === Load WAND ===
     wand_df = pd.read_excel(wand_file.file, engine='xlrd')
     wand_long = pd.melt(
         wand_df,
@@ -63,23 +65,21 @@ async def compare_timesheets(
     wand_long['Hours'] = pd.to_numeric(wand_long['Hours'], errors='coerce')
     wand_long = wand_long.dropna(subset=['Date', 'Hours'])
 
-    # === Merge with mapping ===
+    # Enrich WAND using mapping
     wand_long = wand_long[wand_long['Name'].isin(mapping_df['proWandName'])]
     wand_long = wand_long.merge(
         mapping_df, left_on='Name', right_on='proWandName', how='left')
 
-    # === Group both ===
-    sap_grouped = sap_long.groupby(['Email', 'Date']).agg(
-        {'Hours': 'sum'}).reset_index()
+    # Group WAND
     wand_grouped = wand_long.groupby(['emailAddress', 'Date', 'projectName']).agg({
         'Hours': 'sum'}).reset_index()
 
-    # === Merge both by Email & Date ===
+    # === Merge SAP and WAND ===
     merged = pd.merge(
         sap_grouped,
         wand_grouped,
-        left_on=['Email', 'Date'],
-        right_on=['emailAddress', 'Date'],
+        left_on=['emailAddress', 'Date', 'projectName'],
+        right_on=['emailAddress', 'Date', 'projectName'],
         how='outer',
         suffixes=('_sap', '_wand')
     )
@@ -88,13 +88,15 @@ async def compare_timesheets(
     merged['Hours_wand'] = merged['Hours_wand'].fillna(0)
     merged['Delta'] = merged['Hours_sap'] - merged['Hours_wand']
 
+    # === Rename for readability ===
+    merged.rename(columns={'emailAddress': 'Email'}, inplace=True)
+
     # === Save to Excel ===
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         merged.to_excel(writer, index=False, sheet_name='Comparison Report')
 
     output.seek(0)
-
     return StreamingResponse(
         output,
         media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
