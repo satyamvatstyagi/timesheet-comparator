@@ -36,43 +36,37 @@ def format_comparison_sheet(workbook, worksheet, merged_df):
             worksheet.write(row_num, col_num, value, fmt)
 
 
-def write_summary_sheet(writer, sap_long, wand_long, mapping_df, email_col):
-    sap_summary = sap_long.groupby(['Email', 'Full Name', 'Date'])[
-        'Hours'].sum().reset_index()
-    wand_summary = wand_long.groupby(['emailAddress', 'Date'])[
-        'Hours'].sum().reset_index()
-
-    all_emails = set(sap_summary['Email']).union(
-        set(wand_summary['emailAddress']))
+def write_summary_sheet(writer, merged_df, mapping_df, email_col):
     summary_data = []
 
-    for email in all_emails:
-        sap_dates = set(sap_summary[sap_summary['Email'] == email]['Date'])
-        wand_dates = set(
-            wand_summary[wand_summary['emailAddress'] == email]['Date'])
+    for email in merged_df['Email'].dropna().unique():
+        df = merged_df[merged_df['Email'] == email]
+
+        # Non-zero days only
+        sap_dates = set(df[df['Hours_sap'] > 0]['Date'])
+        wand_dates = set(df[df['Hours_wand'] > 0]['Date'])
 
         extra_sap = sorted([d.strftime("%d")
                            for d in (sap_dates - wand_dates)])
         extra_wand = sorted([d.strftime("%d")
                             for d in (wand_dates - sap_dates)])
 
-        sap_total = sap_summary[sap_summary['Email'] == email]['Hours'].sum()
-        wand_total = wand_summary[wand_summary['emailAddress']
-                                  == email]['Hours'].sum()
+        total_sap = df['Hours_sap'].sum()
+        total_wand = df['Hours_wand'].sum()
+        delta = total_sap - total_wand
 
-        name = sap_summary[sap_summary['Email'] ==
-                           email]['Full Name'].iloc[0] if email in sap_summary['Email'].values else ""
+        full_name = df['Full Name'].iloc[0] if 'Full Name' in df else ""
         team = mapping_df[mapping_df[email_col] ==
                           email]['projectName'].iloc[0] if email in mapping_df[email_col].values else "N/A"
 
         summary_data.append({
             "Email": email,
-            "Full Name": name,
+            "Full Name": full_name,
             "Days Only in SAP": extra_sap,
             "Days Only in WAND": extra_wand,
-            "Total SAP Hours": round(sap_total, 2),
-            "Total WAND Hours": round(wand_total, 2),
-            "Hour Difference": round(sap_total - wand_total, 2),
+            "Total SAP Hours": round(total_sap, 2),
+            "Total WAND Hours": round(total_wand, 2),
+            "Hour Difference": round(delta, 2),
             "Team": team
         })
 

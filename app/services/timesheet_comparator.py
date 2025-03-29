@@ -11,7 +11,8 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
     # === Load mapping file ===
     mapping_df = pd.read_csv(mapping_file.file)
     mapping_df.columns = mapping_df.columns.str.strip()
-    email_col = next((col for col in mapping_df.columns if 'email' in col.lower()), None)
+    email_col = next(
+        (col for col in mapping_df.columns if 'email' in col.lower()), None)
     if email_col is None:
         raise ValueError("'email' column not found in mapping.csv")
 
@@ -24,30 +25,38 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
     emails = sap_data.iloc[:, 4]
     full_names = sap_data.iloc[:, 3]
     hours_data = sap_data.iloc[:, 6:].applymap(
-        lambda x: float(str(x).replace(" H", "").strip()) if pd.notnull(x) else 0
+        lambda x: float(str(x).replace(" H", "").strip()
+                        ) if pd.notnull(x) else 0
     )
 
     sap_long = pd.melt(hours_data.reset_index(drop=True),
                        var_name="DayIndex", value_name="Hours")
-    sap_long['Email'] = emails.repeat(hours_data.shape[1]).reset_index(drop=True)
-    sap_long['Full Name'] = full_names.repeat(hours_data.shape[1]).reset_index(drop=True)
+    sap_long['Email'] = emails.repeat(
+        hours_data.shape[1]).reset_index(drop=True)
+    sap_long['Full Name'] = full_names.repeat(
+        hours_data.shape[1]).reset_index(drop=True)
     sap_long['Date'] = list(dates) * len(sap_data)
-    sap_long = sap_long[['Email', 'Full Name', 'Date', 'Hours']].dropna(subset=['Date', 'Hours'])
+    sap_long = sap_long[['Email', 'Full Name', 'Date', 'Hours']].dropna(subset=[
+                                                                        'Date', 'Hours'])
 
-    sap_grouped = sap_long.groupby(['Email', 'Full Name', 'Date']).agg({'Hours': 'sum'}).reset_index()
-    sap_grouped = sap_grouped.merge(mapping_df, left_on='Email', right_on=email_col, how='left')
+    sap_grouped = sap_long.groupby(['Email', 'Full Name', 'Date']).agg({
+        'Hours': 'sum'}).reset_index()
+    sap_grouped = sap_grouped.merge(
+        mapping_df, left_on='Email', right_on=email_col, how='left')
     sap_grouped.rename(columns={email_col: 'emailAddress'}, inplace=True)
     sap_grouped.drop(columns=['Email'], inplace=True)
 
     # === Load WAND ===
     wand_df = pd.read_excel(wand_file.file, engine='xlrd')
-    wand_long = pd.melt(wand_df, id_vars=['Name'], var_name='Date', value_name='Hours')
+    wand_long = pd.melt(
+        wand_df, id_vars=['Name'], var_name='Date', value_name='Hours')
     wand_long['Date'] = pd.to_datetime(wand_long['Date'], errors='coerce')
     wand_long['Hours'] = pd.to_numeric(wand_long['Hours'], errors='coerce')
     wand_long = wand_long.dropna(subset=['Date', 'Hours'])
 
     wand_long = wand_long[wand_long['Name'].isin(mapping_df['proWandName'])]
-    wand_long = wand_long.merge(mapping_df, left_on='Name', right_on='proWandName', how='left')
+    wand_long = wand_long.merge(
+        mapping_df, left_on='Name', right_on='proWandName', how='left')
 
     wand_grouped = wand_long.groupby(['emailAddress', 'Date', 'projectName']).agg({
         'Hours': 'sum'
@@ -80,7 +89,7 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
         worksheet = writer.sheets['Comparison Report']
         format_comparison_sheet(writer.book, worksheet, merged)
 
-        summary_df = write_summary_sheet(writer, sap_long, wand_long, mapping_df, email_col)
+        summary_df = write_summary_sheet(writer, merged, mapping_df, email_col)
         summary_ws = writer.sheets['Summary']
         format_summary_sheet(writer.book, summary_ws, summary_df)
 
