@@ -2,6 +2,7 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import StreamingResponse
 import pandas as pd
 from io import BytesIO
+import re
 
 app = FastAPI()
 
@@ -12,29 +13,45 @@ async def compare_timesheets(
     wand_file: UploadFile = File(...),
     mapping_file: UploadFile = File(...)
 ):
-    # === Load mapping.csv ===
+    # === Load mapping file ===
     mapping_df = pd.read_csv(mapping_file.file)
-    print("✅ Mapping loaded:", mapping_df.columns.tolist())
+    print("✅ Mapping loaded")
 
-    # === Load SAP timesheet (skip first 5 metadata rows) ===
-    sap_df = pd.read_excel(sap_file.file, skiprows=5)
-    sap_df.rename(columns={sap_df.columns[0]: 'Date'}, inplace=True)
+    # === Load SAP sheet ===
+    sap_raw = pd.read_excel(sap_file.file, header=None, skiprows=19)
 
-    # Melt SAP to long format: Date | Name | Hours
+    # Extract dates from row 0 (index 19 originally), columns 6 onwards
+    date_row = sap_raw.iloc[0, 6:].tolist()
+    dates = pd.to_datetime(date_row, errors='coerce').date
+
+    # Extract actual data from row 2 onward (index=21)
+    sap_data = sap_raw.iloc[2:].reset_index(drop=True)
+
+    # Extract email column (index 4)
+    emails = sap_data.iloc[:, 4]
+
+    # Get hours from columns 6 onwards
+    hours_data = sap_data.iloc[:, 6:]
+
+    # Clean '8.00 H' → 8.0
+    hours_data = hours_data.applymap(lambda x: float(
+        str(x).replace(" H", "").strip()) if pd.notnull(x) else 0)
+
+    # Repeat emails to match melt output
     sap_long = pd.melt(
-        sap_df,
-        id_vars=['Date'],
-        var_name='Name',
-        value_name='Hours'
+        hours_data.reset_index(drop=True),
+        var_name="DayIndex",
+        value_name="Hours"
     )
-    sap_long['Date'] = pd.to_datetime(
-        sap_long['Date'], errors='coerce').dt.date
-    sap_long['Hours'] = pd.to_numeric(sap_long['Hours'], errors='coerce')
-    sap_long = sap_long.dropna(subset=['Date', 'Hours'])
-    print("✅ SAP entries:", sap_long.shape)
+    sap_long['Email'] = emails.repeat(
+        hours_data.shape[1]).reset_index(drop=True)
+    sap_long['Date'] = list(dates) * len(sap_data)
 
-    # === Load and melt WAND ===
-    wand_df = pd.read_excel(wand_file.file, engine='xlrd')  # for .xls support
+    sap_long = sap_long[['Email', 'Date', 'Hours']]
+    sap_long = sap_long.dropna(subset=['Date', 'Hours'])
+
+    # === Load WAND timesheet ===
+    wand_df = pd.read_excel(wand_file.file, engine='xlrd')
     wand_long = pd.melt(
         wand_df,
         id_vars=['Name'],
@@ -45,38 +62,39 @@ async def compare_timesheets(
         wand_long['Date'], errors='coerce').dt.date
     wand_long['Hours'] = pd.to_numeric(wand_long['Hours'], errors='coerce')
     wand_long = wand_long.dropna(subset=['Date', 'Hours'])
-    print("✅ WAND entries:", wand_long.shape)
 
-    # === Filter and enrich WAND using mapping ===
+    # === Merge with mapping ===
     wand_long = wand_long[wand_long['Name'].isin(mapping_df['proWandName'])]
     wand_long = wand_long.merge(
         mapping_df, left_on='Name', right_on='proWandName', how='left')
 
-    # === Group both timesheets ===
-    sap_grouped = sap_long.groupby(['Name', 'Date']).agg(
+    # === Group both ===
+    sap_grouped = sap_long.groupby(['Email', 'Date']).agg(
         {'Hours': 'sum'}).reset_index()
-    wand_grouped = wand_long.groupby(
-        ['Name', 'Date', 'emailAddress', 'projectName']
-    ).agg({'Hours': 'sum'}).reset_index()
+    wand_grouped = wand_long.groupby(['emailAddress', 'Date', 'projectName']).agg({
+        'Hours': 'sum'}).reset_index()
 
-    # === Merge and compute delta ===
+    # === Merge both by Email & Date ===
     merged = pd.merge(
         sap_grouped,
         wand_grouped,
-        on=['Name', 'Date'],
+        left_on=['Email', 'Date'],
+        right_on=['emailAddress', 'Date'],
         how='outer',
         suffixes=('_sap', '_wand')
     )
+
     merged['Hours_sap'] = merged['Hours_sap'].fillna(0)
     merged['Hours_wand'] = merged['Hours_wand'].fillna(0)
     merged['Delta'] = merged['Hours_sap'] - merged['Hours_wand']
 
-    # === Export to Excel ===
+    # === Save to Excel ===
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         merged.to_excel(writer, index=False, sheet_name='Comparison Report')
 
     output.seek(0)
+
     return StreamingResponse(
         output,
         media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
