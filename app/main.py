@@ -93,6 +93,11 @@ async def compare_timesheets(
     # === Rename for readability ===
     merged.rename(columns={'emailAddress': 'Email'}, inplace=True)
 
+    # ✅ Reorder columns
+    desired_order = ['Date', 'Email', 'proWandName',
+                     'projectName', 'Hours_sap', 'Hours_wand', 'Delta']
+    merged = merged[desired_order]
+
     # === Save to Excel ===
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
