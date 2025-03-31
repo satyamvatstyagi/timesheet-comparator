@@ -59,6 +59,10 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
         suffixes=('_sap', '_wand')
     )
 
+    # Fill in missing metadata
+    merged.rename(columns={'emailAddress': 'Email'}, inplace=True)
+    merged = fill_missing_info(merged, sap_long, mapping_df, email_col)
+
     merged['Hours_sap'] = merged['Hours_sap'].fillna(0)
     merged['Hours_wand'] = merged['Hours_wand'].fillna(0)
     merged['Delta'] = merged['Hours_sap'] - merged['Hours_wand']
@@ -66,7 +70,8 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
 
     print(f"merged data: {merged.head()}")
     print(f"Unique email addresses in merged data: {merged['Email'].unique()}")
-    print(f"Unique project names in merged data: {merged['projectName'].unique()}")
+    print(
+        f"Unique project names in merged data: {merged['projectName'].unique()}")
     print(f"Unique dates in merged data: {merged['Date'].unique()}")
     print(f"Unique names in merged data: {merged['Full Name'].unique()}")
 
@@ -80,3 +85,26 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
     # === Final Excel Report Generation ===
     output = write_report_to_excel(merged, mapping_df, email_col)
     return output
+
+
+def fill_missing_info(merged_df, sap_long, mapping_df, email_col):
+    # Create helper mappings
+    email_to_name = sap_long.dropna(subset=['Email', 'Full Name']) \
+        .drop_duplicates('Email').set_index('Email')['Full Name'].to_dict()
+
+    email_to_wand = mapping_df.dropna(subset=[email_col, 'proWandName']) \
+        .drop_duplicates(email_col).set_index(email_col)['proWandName'].to_dict()
+
+    # Fill missing Full Name
+    merged_df['Full Name'] = merged_df.apply(
+        lambda row: email_to_name.get(row['Email'], row['Full Name']),
+        axis=1
+    )
+
+    # Fill missing proWandName
+    merged_df['proWandName'] = merged_df.apply(
+        lambda row: email_to_wand.get(row['Email'], row.get('proWandName')),
+        axis=1
+    )
+
+    return merged_df
