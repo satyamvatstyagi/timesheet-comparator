@@ -23,6 +23,8 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
             "❌ Failed to load mapping file or detect email column.")
 
     sap_raw_data, dates = load_sap_file(sap_path)
+    print(f"Data loaded from SAP: {sap_raw_data.head(30)}")
+    print(f"Dates in SAP: {dates}")
     if sap_raw_data.empty:
         raise ValueError("❌ Failed to load SAP file.")
     sap_grouped, sap_long = process_sap_data(
@@ -32,14 +34,26 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
     if wand_df.empty:
         raise ValueError("❌ Failed to load WAND file.")
     wand_grouped = process_wand_data(wand_df, mapping_df)
+    print(f"Data loaded from WAND: {wand_grouped.head(30)}")
+    print(f"Data loaded from SAP: {sap_grouped.head(30)}")
+    print(f"Mapping Data: {mapping_df.head()}")
 
     # === Merge Process ===
     sap_grouped['Date'] = pd.to_datetime(sap_grouped['Date'])
     wand_grouped['Date'] = pd.to_datetime(wand_grouped['Date'])
 
+    print(f"Dates in SAP: {sap_grouped['Date'].unique()}")
+    print(f"Dates in WAND: {wand_grouped['Date'].unique()}")
+
+    # Filter sap_grouped and wand_grouped before merge
+    email_filter = "ankit.saxena02@nagarro.com"
+
+    filtered_sap = sap_grouped[sap_grouped['emailAddress'] == email_filter]
+    filtered_wand = wand_grouped[wand_grouped['emailAddress'] == email_filter]
+
     merged = pd.merge(
-        sap_grouped,
-        wand_grouped,
+        filtered_sap,
+        filtered_wand,
         on=['emailAddress', 'Date', 'projectName'],
         how='outer',
         suffixes=('_sap', '_wand')
@@ -49,6 +63,12 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
     merged['Hours_wand'] = merged['Hours_wand'].fillna(0)
     merged['Delta'] = merged['Hours_sap'] - merged['Hours_wand']
     merged.rename(columns={'emailAddress': 'Email'}, inplace=True)
+
+    print(f"merged data: {merged.head()}")
+    print(f"Unique email addresses in merged data: {merged['Email'].unique()}")
+    print(f"Unique project names in merged data: {merged['projectName'].unique()}")
+    print(f"Unique dates in merged data: {merged['Date'].unique()}")
+    print(f"Unique names in merged data: {merged['Full Name'].unique()}")
 
     # === Reorder Columns ===
     desired_order = [
