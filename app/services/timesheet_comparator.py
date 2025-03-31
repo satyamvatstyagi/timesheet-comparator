@@ -90,6 +90,9 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
     ]
     merged = merged[desired_order]
 
+    # ❗ Filter: Only keep rows where Full Name is present (i.e., from SAP)
+    merged = merged[merged['Full Name'].notna()]
+
     # === Final Excel Report Generation ===
     output = write_report_to_excel(merged, mapping_df, email_col)
     return output
