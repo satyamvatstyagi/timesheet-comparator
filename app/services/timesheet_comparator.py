@@ -46,14 +46,22 @@ async def process_timesheets(sap_file, wand_file, mapping_file):
     print(f"Dates in WAND: {wand_grouped['Date'].unique()}")
 
     # Filter sap_grouped and wand_grouped before merge
-    email_filter = "ankit.saxena02@nagarro.com"
+    # email_filter = "anurag.sharma07@nagarro.com"
 
-    filtered_sap = sap_grouped[sap_grouped['emailAddress'] == email_filter]
-    filtered_wand = wand_grouped[wand_grouped['emailAddress'] == email_filter]
+    # filtered_sap = sap_grouped[sap_grouped['emailAddress'] == email_filter]
+    # filtered_wand = wand_grouped[wand_grouped['emailAddress'] == email_filter]
+
+    # merged = pd.merge(
+    #     filtered_sap,
+    #     filtered_wand,
+    #     on=['emailAddress', 'Date', 'projectName'],
+    #     how='outer',
+    #     suffixes=('_sap', '_wand')
+    # )
 
     merged = pd.merge(
-        filtered_sap,
-        filtered_wand,
+        sap_grouped,
+        wand_grouped,
         on=['emailAddress', 'Date', 'projectName'],
         how='outer',
         suffixes=('_sap', '_wand')
