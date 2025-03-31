@@ -14,6 +14,12 @@ def write_report_to_excel(merged_df, mapping_df, email_col):
         # Sheet 1: Comparison Report
         merged_df.to_excel(writer, index=False, sheet_name='Comparison Report')
         worksheet = writer.sheets['Comparison Report']
+
+        # ✅ Enhance visibility
+        worksheet.set_zoom(130)           # Zoom to 130%
+        worksheet.freeze_panes(1, 0)      # Freeze first row
+        worksheet.set_selection('A2')     # Default selection to first data row
+
         format_comparison_sheet(writer.book, worksheet, merged_df)
 
         # Sheet 2: Summary
